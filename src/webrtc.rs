@@ -1253,7 +1253,10 @@ impl WebRtcSession {
                                 let supported = policy <= 1 && crate::microphone::available() && message_role.is_desktop();
                                 let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
                                 let next = || out_sequence.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                let response = crate::system_actions::session_rpc_response_with_error(rpc_fields.as_deref().unwrap(), u8::from(!supported)).unwrap();
+                                // The viewer probes the virtual audio driver on every connect; answering
+                                // an error while the opt-in microphone is off makes it report a broken microphone.
+                                let error = u8::from(crate::microphone::requested() && !crate::microphone::available());
+                                let response = crate::system_actions::session_rpc_response_with_error(rpc_fields.as_deref().unwrap(), error).unwrap();
                                 let response = crate::initialization::envelope(next(), ts, 22, &response);
                                 // Windows NevaudioHelper completes the request on TEXT; mirror CONTROL
                                 // for viewers that dispatch responses there, as for privacy RPCs.
@@ -1270,7 +1273,7 @@ impl WebRtcSession {
                                         enqueue(crate::initialization::envelope(next(), ts, 3, &[8, action as u8]));
                                     });
                                 } else { enqueue(response); }
-                                log::info!("Remote microphone policy: value={policy} supported={supported}");
+                                log::info!("Remote microphone policy: value={policy} supported={supported} error={error}");
                                 return;
                             }
                             if let Some(response) = rpc_fields.as_deref().and_then(|r| crate::system_actions::plugin_response(r).or_else(|| crate::system_actions::session_rpc_response(r))) {
