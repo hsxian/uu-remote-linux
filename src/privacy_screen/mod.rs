@@ -173,6 +173,7 @@ pub fn rpc_accept(rpc: &[crate::protocol::WireField]) -> Option<(Vec<u8>, Option
 /// Mac 4.43.0 handleForReportError: -7 resets privacy to off; -9 reports an RDP session change,
 /// not privacy success. Success is carried by RpcResponse 3 and SystemMetrics.setting 7.
 pub const REPORT_ERROR: i32 = -7;
+const RETRY: std::time::Duration = std::time::Duration::from_millis(200);
 impl Accepted {
     pub fn apply(self) -> Result<(), String> {
         VIEWER_OVERRIDE.store(true, Ordering::Relaxed);
@@ -264,9 +265,11 @@ fn auto_enable(mode: Mode, generation: u64) {
             Ok(true) => { log::info!("Privacy auto: enabled mode={mode:?} on attempt {attempt}"); return; }
             Ok(false) => { log::info!("Privacy auto: skipped, the viewer already chose a mode"); return; }
             Err(e) if e.contains("no active desktop session") => return,
-            Err(e) if e.contains("Portal desktop unavailable") => {
-                log::info!("Privacy auto: desktop capture not ready (attempt {attempt})");
-                std::thread::sleep(std::time::Duration::from_secs(1));
+            // A capture that is not up yet and a Mutter that has not settled after the previous
+            // session both clear on their own; auto_set already rolled back, so retrying is safe.
+            Err(e) if e.contains("Portal desktop unavailable") || e.contains("display power mode") => {
+                log::info!("Privacy auto: retrying, {e} (attempt {attempt})");
+                std::thread::sleep(RETRY);
             }
             Err(e) => { log::warn!("Privacy auto failed: {e}"); return; }
         }

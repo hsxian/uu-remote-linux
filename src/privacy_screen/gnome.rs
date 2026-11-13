@@ -101,17 +101,32 @@ fn parse_power_save_mode(text: &str) -> Option<i32> {
     (0..=3).contains(&mode).then_some(mode)
 }
 
+/// A Set can be overwritten the moment it lands, because Mutter drives `PowerSaveMode` from its own
+/// idle detection - typical on a reconnect that follows a restore, where the screen has just woken.
+/// Re-assert until the value sticks rather than reporting a failure the viewer then has to retry.
+const APPLY_TRIES: u32 = 4;
+const APPLY_PAUSE: std::time::Duration = std::time::Duration::from_millis(80);
+
 fn set_power_save_mode(mode: i32) -> Result<(), String> {
-    tool::gdbus(
-        MUTTER,
-        PATH,
-        "org.freedesktop.DBus.Properties.Set",
-        &[MUTTER, "PowerSaveMode", &format!("<int32 {mode}>")],
-    )?;
-    if power_save_mode()? != mode {
-        return Err("Mutter did not apply the requested display power mode".into());
+    let mut kept = None;
+    for _ in 0..APPLY_TRIES {
+        tool::gdbus(
+            MUTTER,
+            PATH,
+            "org.freedesktop.DBus.Properties.Set",
+            &[MUTTER, "PowerSaveMode", &format!("<int32 {mode}>")],
+        )?;
+        std::thread::sleep(APPLY_PAUSE);
+        let applied = power_save_mode()?;
+        if applied == mode {
+            return Ok(());
+        }
+        kept = Some(applied);
     }
-    Ok(())
+    Err(format!(
+        "Mutter did not apply the requested display power mode (kept {})",
+        kept.unwrap_or_default()
+    ))
 }
 
 pub struct Gnome;
