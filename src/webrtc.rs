@@ -48,6 +48,15 @@ pub struct SessionContext {
 /// Desktop role of one peer. A tool peer (file transfer, terminal, port mapping) gains it
 /// when the viewer opens the desktop on that same connection with SimpleAction 4
 /// capture_desktop instead of a new desktop offer (#99).
+/// The X11 desktop whose 分辨率 changes the display mode itself (see `desktop_mode`); None for the
+/// backends and layouts that scale instead. Gates both a viewer request and a remembered replay.
+fn x11_resize_display(screen: &ScreenCapture) -> Option<String> {
+    (screen.init_error.is_none() && screen.portal.is_none()
+        && screen.backend == crate::desktop_backend::DesktopBackend::X11
+        && crate::desktop_mode::enabled() && !crate::wayland::x11_multiscreen())
+        .then(|| screen.display.clone())
+}
+
 pub struct DesktopRole {
     active: tokio::sync::watch::Sender<bool>,
     input: std::sync::Mutex<Option<Arc<crate::input::DesktopInputSession>>>,
@@ -391,6 +400,10 @@ impl WebRtcSession {
         let (video_settings, video_settings_rx) = tokio::sync::watch::channel(crate::capture_setting::VideoSettings::default());
         let video_settings = Arc::new(video_settings);
 
+        // Set once this connection asks for a 分辨率 itself; a size remembered from an earlier session
+        // must never override the viewer's own choice.
+        let resolution_chosen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         // 注册视频轨
         let video_track = Arc::new(crate::video_track::VideoTrack::new());
 
@@ -575,6 +588,7 @@ impl WebRtcSession {
             let peer_video_track = control_video_track.clone();
             let peer_actions = peer_actions.clone();
             let peer_selection = video_selection;
+            let peer_resolution_chosen = resolution_chosen.clone();
             let chroma_sync_rx = chroma_sync_rx.clone();
             if label == "FILE_DATA_CHANNEL" { *file_channel.lock().unwrap() = Some(d.clone()); }
 
@@ -676,6 +690,7 @@ impl WebRtcSession {
                     let capture_role=channel_role.clone();
                     let settings_serial=peer_settings_serial.clone();
                     let capture_selection = peer_selection;
+                    let capture_resolution_chosen = peer_resolution_chosen.clone();
                     tokio::spawn(async move {
                         let mut health = tokio::time::interval(std::time::Duration::from_millis(100));
                         loop {
@@ -785,16 +800,16 @@ impl WebRtcSession {
                             // X11: 分辨率 changes the display mode itself, like the official Windows host; the stream
                             // then carries the new native size instead of a scaled one (desktop_mode). With
                             // UU_X11_MULTISCREEN the monitor layout stays as it is and the stream is scaled.
-                            let resized = if desktop && active_screen.init_error.is_none() && active_screen.portal.is_none()
-                                && active_screen.backend == crate::desktop_backend::DesktopBackend::X11 && crate::desktop_mode::enabled()
-                                && !crate::wayland::x11_multiscreen() {
-                                match crate::capture_setting::requested_resolution(&rpc_fields) {
-                                    Some(request) => {
-                                        let display = active_screen.display.clone();
-                                        tokio::task::spawn_blocking(move || crate::desktop_mode::apply(&display, request)).await.ok().flatten()
-                                            .filter(|size| *size != input_size)
+                            let resized = if desktop {
+                                match (x11_resize_display(&active_screen), crate::capture_setting::requested_resolution(&rpc_fields)) {
+                                    (Some(display), Some(request)) => {
+                                        capture_resolution_chosen.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        let applied = tokio::task::spawn_blocking(move || crate::desktop_mode::apply(&display, request)).await.ok().flatten();
+                                        // Only what really took effect is worth replaying later.
+                                        if applied.is_some() { crate::desktop_mode::remember(request); }
+                                        applied.filter(|size| *size != input_size)
                                     },
-                                    None => None,
+                                    _ => None,
                                 }
                             } else { None };
                             let input_size = resized.unwrap_or(input_size);
@@ -866,11 +881,13 @@ impl WebRtcSession {
                     let open_screen = screen.clone();
                     let open_selection = peer_selection;
                     let open_text_out = text_out.clone();
+                    let open_resolution_chosen = peer_resolution_chosen.clone();
                     d.on_open(Box::new(move || {
                         if let Some(start_drain) = open_drain { tokio::spawn(start_drain()); }
                         let init_actions = open_actions.clone();
                         let init_video = open_video.clone();
                         let init_track = open_track.clone();
+                        let init_resolution_chosen = open_resolution_chosen.clone();
                         let channel = channel.clone();
                         let sequence = initial_sequence.clone();
                         let screen = open_screen.clone();
@@ -1079,6 +1096,7 @@ impl WebRtcSession {
                             let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
                             let (mut desktop, mut promoted, mut lock_reported) = (desktop, false, desktop);
                             let mut privacy_reported = false;
+                            let mut resolution_replayed = false;
                             let mut screen = screen;
                             loop {
                             loop {
@@ -1170,6 +1188,40 @@ impl WebRtcSession {
                                         if channel.send(&bytes::Bytes::from(state)).await.is_err() { return; }
                                     }
                                 });
+                            }
+                            // Re-apply the 分辨率 remembered from an earlier session. Not before the
+                            // initialization messages: a mode change costs up to 4.5 s of xrandr checks
+                            // and the viewer would sit on 正在传输画面. It takes a size change through
+                            // the same Message 7 + 25 it already handles for a size it asked for.
+                            if !resolution_replayed {
+                                resolution_replayed = true;
+                                if let Some((display, size)) = x11_resize_display(&screen).zip(crate::desktop_mode::remembered()) {
+                                    let (channel, video, chosen, sequence, display) =
+                                        (channel.clone(), init_video.clone(), init_resolution_chosen.clone(), sequence.clone(), display);
+                                    tokio::spawn(async move {
+                                        use std::sync::atomic::Ordering::Relaxed;
+                                        // Grace period for the viewer's own request: the official clients
+                                        // send the resolution they kept shortly after connecting, and that
+                                        // choice wins. One arriving later still overrides this size the
+                                        // usual way, and is remembered again.
+                                        for _ in 0..20 {
+                                            if chosen.load(Relaxed) || channel.ready_state()
+                                                != webrtc::data_channel::data_channel_state::RTCDataChannelState::Open { return; }
+                                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                        }
+                                        if chosen.load(Relaxed) { return; }
+                                        let Some(size) = tokio::task::spawn_blocking(move || crate::desktop_mode::replay(&display, size)).await.ok().flatten() else { return };
+                                        video.send_modify(|s| s.source_generation = s.source_generation.wrapping_add(1));
+                                        log::info!("Remembered desktop resolution replayed: {}x{}", size.0, size.1);
+                                        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                        let current = *video.borrow();
+                                        if let Ok(message) = crate::capture_setting::screen_sources(sequence.fetch_add(1, Relaxed), ts, size, current.output, "Linux desktop") {
+                                            let _ = channel.send(&bytes::Bytes::from(message)).await;
+                                        }
+                                        let sync = crate::capture_setting::sync_payload(&current, size);
+                                        let _ = channel.send(&bytes::Bytes::from(crate::initialization::envelope(sequence.fetch_add(1, Relaxed), ts, 25, &sync))).await;
+                                    });
+                                }
                             }
                             // Mirror the Linux pointer shape; the video itself carries no pointer.
                             let mut shapes = crate::cursor::monitor(&screen.display);

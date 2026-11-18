@@ -42,6 +42,9 @@ pub(crate) struct Settings {
     #[serde(default, deserialize_with = "lenient_string")] pub(crate) video_codec: Option<String>,
     /// Last privacy_type the viewer enabled (2 picture, 3 screen off), not the current live state.
     #[serde(default)] pub(crate) privacy_type: Option<u8>,
+    /// Last 分辨率 the viewer switched the X11 desktop to, as "1280x720". Cleared (None) when it
+    /// picks 原始/跟随被控端; replayed on the next desktop connection only with UU_RESOLUTION_REMEMBER=1.
+    #[serde(default, deserialize_with = "lenient_string")] pub(crate) resolution: Option<String>,
 }
 
 fn lenient_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
@@ -49,7 +52,7 @@ fn lenient_string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<O
     match Option::<serde_json::Value>::deserialize(deserializer)? {
         Some(serde_json::Value::String(s)) => Ok(Some(s)),
         Some(_) => {
-            log::warn!("Ignoring non-string video_encoder/video_codec in host settings");
+            log::warn!("Ignoring a non-string video_encoder/video_codec/resolution in host settings");
             Ok(None)
         }
         None => Ok(None),
@@ -407,6 +410,13 @@ mod tests {
         assert_eq!(again.video_encoder.as_deref(), Some("vaapi"));
         assert_eq!(again.video_codec.as_deref(), Some("h264"));
         assert!(again.auto_lock);
+        // 分辨率 round-trips and clearing it (原始/跟随被控端) keeps every other field.
+        let remembered = merge_save(|s| s.resolution = Some("1280x720".into())).unwrap();
+        assert_eq!(remembered.resolution.as_deref(), Some("1280x720"));
+        assert_eq!(remembered.video_codec.as_deref(), Some("h264"));
+        let cleared = merge_save(|s| s.resolution = None).unwrap();
+        assert!(cleared.resolution.is_none());
+        assert_eq!(cleared.video_encoder.as_deref(), Some("vaapi"));
         let mode = { use std::os::unix::fs::PermissionsExt; std::fs::metadata(&path).unwrap().permissions().mode() & 0o777 };
         assert_eq!(mode, 0o600);
         // A mute/lock save must not drop video_* written after the in-memory copy was taken.
@@ -422,10 +432,10 @@ mod tests {
         // The security-menu save must not flip the CLI-owned local_unlock.
         assert_eq!(disk["local_unlock"], true);
         // A non-string video field must not fail the whole document (security switches survive).
-        std::fs::write(&path, br#"{"auto_lock":true,"keep_mute":false,"mute_permanent":true,"video_encoder":1,"video_codec":{"x":1}}"#).unwrap();
+        std::fs::write(&path, br#"{"auto_lock":true,"keep_mute":false,"mute_permanent":true,"video_encoder":1,"video_codec":{"x":1},"resolution":1280}"#).unwrap();
         let loaded = load_settings();
         assert!(loaded.auto_lock && !loaded.keep_mute && loaded.mute_permanent);
-        assert!(loaded.video_encoder.is_none() && loaded.video_codec.is_none());
+        assert!(loaded.video_encoder.is_none() && loaded.video_codec.is_none() && loaded.resolution.is_none());
         merge_save(|s| s.video_encoder = Some("cpu".into())).unwrap();
         let disk: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(disk["auto_lock"], true);
