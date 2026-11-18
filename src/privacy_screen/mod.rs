@@ -248,7 +248,7 @@ fn auto_enable(mode: Mode, generation: u64) {
     // Only portal backends ride the capture's portal session; the X11 backend dims outputs on
     // its own, so waiting for a portal on an Xorg session would stall the auto-enable forever.
     let portal_backend = backend::detect().is_some_and(|backend| backend.name() != X11_BACKEND);
-    for attempt in 1..=5 {
+    for attempt in 1..=25 {
         if !current() { return; }
         if VIEWER_OVERRIDE.load(Ordering::Relaxed) {
             log::info!("Privacy auto: skipped, the viewer already chose a mode");
@@ -257,8 +257,8 @@ fn auto_enable(mode: Mode, generation: u64) {
         // Not a failure yet: the desktop capture opens its portal session a moment after the peer
         // connects, and entering without it would roll back and log a restore for nothing.
         if portal_backend && !crate::portal::available() {
-            log::info!("Privacy auto: waiting for the desktop capture (attempt {attempt})");
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            if attempt == 1 { log::info!("Privacy auto: waiting for the desktop capture"); }
+            std::thread::sleep(RETRY);
             continue;
         }
         match auto_set(mode) {
@@ -282,10 +282,9 @@ pub fn session_started() {
     let Some(mode) = auto else { return };
     if !first { return; }
     let generation = AUTO_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        auto_enable(mode, generation);
-    });
+    // No lead-in delay: the 1500 ms one let the viewer read an off state and warn about a missing
+    // privacy screen before the auto mode was applied.
+    std::thread::spawn(move || auto_enable(mode, generation));
 }
 pub fn session_ended() {
     if let Ok(mut s) = STATE.lock() {
