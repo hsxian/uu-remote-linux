@@ -689,18 +689,14 @@ static struct uu_portal *open_persist(const char *restore, void (*save_token)(co
         g_variant_builder_add(&options, "{sv}", "cursor_mode", g_variant_new_uint32(2));
         p->cursor_applied = 2;
     }
-    /* Capture grants are not remembered unless we ask: with no persist_mode the portal leaves the
-     * session non-persistent, so every fresh session re-opens the source picker - unclickable on an
-     * unattended host. Ask only when UU_PORTAL_PERSIST is on, because persist_mode 2 keeps the grant
-     * until it is explicitly revoked and that is a consent decision, not a default. The option needs
-     * ScreenCast version 4 and an option the backend does not know closes the session, so trust only
-     * the advertised version. p->restore_token is not replayed here: tokens are per-interface and the
-     * stored one came from the RemoteDesktop Start reply. */
-    const char *persist = g_getenv("UU_PORTAL_PERSIST");
-    if (persist && (!g_ascii_strcasecmp(persist, "1") || !g_ascii_strcasecmp(persist, "true") ||
-                    !g_ascii_strcasecmp(persist, "always")) &&
-        interface_property(p, SCREEN, "version") >= 4)
-        g_variant_builder_add(&options, "{sv}", "persist_mode", g_variant_new_uint32(2));
+    /* No persist_mode on SelectSources: this session was created through RemoteDesktop, and GNOME
+     * rejects the option outright there ("Remote desktop sessions cannot persist", InvalidArgument)
+     * - the whole open dies before any consent dialog can appear, with no picture and nothing to
+     * click on an unattended host (verified live against mutter's portal backend; its ScreenCast
+     * interface advertises version 5, so a version gate cannot make this safe to send). Capture
+     * remembering rides the RemoteDesktop restore token instead: SelectDevices above persists the
+     * devices (accepted there) and the Start reply hands back the token that open_persist saves
+     * for the next session. */
     results = request(p, SCREEN, "SelectSources", &options, 1, error);
     if (!results) goto done;
     g_variant_unref(results);
