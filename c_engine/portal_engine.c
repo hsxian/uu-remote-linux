@@ -689,6 +689,14 @@ static struct uu_portal *open_persist(const char *restore, void (*save_token)(co
         g_variant_builder_add(&options, "{sv}", "cursor_mode", g_variant_new_uint32(2));
         p->cursor_applied = 2;
     }
+    /* Capture is only remembered when we ask for it: with no persist_mode the portal leaves the
+     * grant non-persistent, so every fresh session re-opens the source picker - unclickable on an
+     * unattended host. RemoteDesktop already asks above; this is the ScreenCast half. Version 2 of
+     * the interface added the option, and an option the backend rejects closes the session, so gate
+     * on the advertised version. p->restore_token is deliberately not replayed here: portal tokens
+     * are per-interface, and the stored one came from the RemoteDesktop Start reply. */
+    if (interface_property(p, SCREEN, "version") >= 2)
+        g_variant_builder_add(&options, "{sv}", "persist_mode", g_variant_new_uint32(2));
     results = request(p, SCREEN, "SelectSources", &options, 1, error);
     if (!results) goto done;
     g_variant_unref(results);
