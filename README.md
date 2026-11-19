@@ -67,7 +67,7 @@ UU_LANG=en uuremote-server
 | 鼠标指针样式 | 远端指针形状实时同步（X11） |
 | 剪贴板 | 双向文本同步；Wayland 手机输入法输入通过剪贴板兜底粘贴，见下文 |
 | 观看模式批注 | 控制端观看模式下开启「批注」后画的笔迹显示在 Linux 屏幕上，并随画面传回控制端（X11，需要合成器；覆盖层不拦截鼠标）；关闭批注或断开连接时清除。已用 Mac 控制端 4.42.0 实测，手机控制端未测 |
-| 画质 / 帧率 / 分辨率 | 自动、原画 20M、超清 8M、高清 2M、自定义；30/60/90/144 帧；X11 下切换分辨率会像官方 Windows 被控端一样真正修改桌面分辨率（xrandr，缺少该模式时自动添加；选「原始」或断开后恢复），`UU_DESKTOP_RESIZE=0` 改为仅由编码器缩放；Wayland 仍由编码器缩放 |
+| 画质 / 帧率 / 分辨率 | 自动、原画 20M、超清 8M、高清 2M、自定义；30/60/90/144 帧；X11 下切换分辨率会像官方 Windows 被控端一样真正修改桌面分辨率（xrandr，缺少该模式时自动添加；选「原始」或断开后恢复），`UU_DESKTOP_RESIZE=0` 改为仅由编码器缩放；Wayland 仍由编码器缩放。控制端真正改成功的尺寸会记在 `host_settings.json`，设 `UU_RESOLUTION_REMEMBER=1` 后下次桌面连接自动切回该尺寸（控制端本次连接自己选的分辨率优先；此时菜单显示「原始」但桌面确实是该尺寸，因为该尺寸已成为新的原始分辨率） |
 | 声音 | 采集系统声音（PulseAudio / PipeWire），Opus 编码传到控制端 |
 | 文件传输 | 上传、下载（含文件夹）、新建文件夹、重命名、删除；iOS 直接上传使用默认接收目录（当前用户的主目录） |
 | 终端 | 官方「终端」工具，PTY 会话，支持多会话、重命名、结束会话和列表自动刷新；重连后旧连接的输入和断开消息不会影响当前会话 |
@@ -359,6 +359,7 @@ systemctl --user restart uuremote-native.service
 | `UU_VERSION_CODE` | 上报给网易云端的被控端版本代码（`x-param-vc`），默认 `4318`；配置文件中对应 `version_code`，环境变量优先 |
 | `UU_DESKTOP_BACKEND` | `auto` / `x11` / `wayland` / `portal` / `kms`（实验性特性） / `none`（无头模式） |
 | `UU_DESKTOP_RESIZE=0` | X11 下控制端切换分辨率时不改桌面分辨率，只缩放编码画面 |
+| `UU_RESOLUTION_REMEMBER=1` | 控制端在 X11 上真正改成功的尺寸本来就记在 `~/.config/uuremote/host_settings.json`（`resolution`，选「原始」即清除）；设本变量后，下次桌面连接会在后台自动切回该尺寸。默认不套用，控制端本次连接自己选的分辨率始终优先。与 `UU_PRIVACY_REMEMBER` 同一口径 |
 | `UU_NVENC_RGB=0` / `=1` | NVENC 直接编码 BGRA（省 CPU）。显示器接在 NVIDIA 卡上时默认关闭（同卡合成时直吃反而更慢），`0` 强制关，`1` 强制开 |
 | `UU_WAYLAND_MULTISCREEN=1` | 启用 Hyprland / niri 物理显示器切换（默认关闭） |
 | `UU_WAYLAND_OUTPUT` | 原生 Wayland 默认采集输出名称，例如 `HDMI-A-1` |

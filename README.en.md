@@ -78,7 +78,7 @@ Protocol strings and messages that come from the UU servers are shown as the ser
 | Pointer shape | Remote cursor shape is mirrored to the viewer (X11) |
 | Clipboard | Two-way text sync; Wayland mobile IME text inputs use clipboard paste fallback (see below) |
 | Viewer annotation | Strokes drawn with 「批注」 (annotate) in the viewer's watch mode appear on the Linux screen and stream back to the viewer (X11, needs a compositing manager; the overlay lets clicks through); cleared when annotation is turned off or the viewer disconnects. Verified with the Mac viewer 4.42.0; mobile viewers untested |
-| Quality / frame rate / resolution | Auto, Original 20M, Ultra 8M, HD 2M, custom; 30/60/90/144 fps; on X11 a resolution choice changes the desktop resolution itself like the official Windows host (xrandr, adding the mode when missing; restored for "original" or on disconnect), `UU_DESKTOP_RESIZE=0` scales in the encoder instead; Wayland scales in the encoder |
+| Quality / frame rate / resolution | Auto, Original 20M, Ultra 8M, HD 2M, custom; 30/60/90/144 fps; on X11 a resolution choice changes the desktop resolution itself like the official Windows host (xrandr, adding the mode when missing; restored for "original" or on disconnect), `UU_DESKTOP_RESIZE=0` scales in the encoder instead; Wayland scales in the encoder. A size the viewer really switched to is stored in `host_settings.json`; with `UU_RESOLUTION_REMEMBER=1` the next desktop connection switches back to it (the viewer's own choice in that session wins; the menu then shows "original" while the desktop is at that size, because it became the new native mode) |
 | Sound | System audio captured from PulseAudio / PipeWire and sent as Opus |
 | File transfer | Upload, download (including folders), create folder, rename, delete; iOS quick uploads use the default receive directory (the current user’s home) |
 | Terminal | The official "Terminal" tool, PTY sessions, multiple sessions, rename, termination and automatic list refresh; input and detach messages from an old connection cannot affect a reattached session |
@@ -396,6 +396,7 @@ Common environment variables:
 | `UU_VERSION_CODE` | Reported host version code (`x-param-vc`), default `4318`; corresponds to `version_code` in config file, environment variable takes precedence |
 | `UU_DESKTOP_BACKEND` | `auto` / `x11` / `wayland` / `portal` / `kms` (experimental feature) / `none` (headless) |
 | `UU_DESKTOP_RESIZE=0` | on X11, keep the desktop resolution and only scale the encoded stream when the viewer picks a resolution |
+| `UU_RESOLUTION_REMEMBER=1` | the size a viewer really switched to on X11 is stored in `~/.config/uuremote/host_settings.json` (`resolution`, cleared by "original") anyway; with this variable the next desktop connection switches back to it in the background. Off by default, and the viewer's own choice in that session always wins. Same rule as `UU_PRIVACY_REMEMBER` |
 | `UU_NVENC_RGB=0` / `=1` | NVENC encodes BGRA directly (saves CPU). Off by default when a monitor is connected to the NVIDIA card (slower when the desktop is composited on the same GPU); `0` forces off, `1` forces on |
 | `UU_WAYLAND_MULTISCREEN=1` | Enable Hyprland physical monitor switching (off by default) |
 | `UU_WAYLAND_OUTPUT` | Initial native Wayland output name, e.g. `HDMI-A-1` |

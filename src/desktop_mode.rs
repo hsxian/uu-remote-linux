@@ -2,6 +2,8 @@
 //! the display mode itself changes (xrandr), not just the encoded size. The mode in use before
 //! the first change is restored for 原始/follow-remote and when the last desktop stream ends.
 //! Disable with UU_DESKTOP_RESIZE=0 (the viewer choice then scales the encoded stream instead).
+//! The size the viewer last chose is stored; with UU_RESOLUTION_REMEMBER=1 it is re-applied when
+//! the next desktop connection opens, unless that session asks for a resolution itself.
 
 use std::process::Command;
 use std::sync::Mutex;
@@ -20,6 +22,31 @@ const MAX_SIDE: u32 = 4096;
 const MIN_SIZE: (u32, u32) = (640, 480);
 
 pub fn enabled() -> bool { std::env::var("UU_DESKTOP_RESIZE").map_or(true, |v| v != "0") }
+
+/// Stores what the viewer just switched to, so the next desktop connection can replay it.
+/// 原始/跟随被控端 (Native) clears the memory. A failed write is only logged: the display mode is
+/// already changed and rolling that back over a config-file error would be worse.
+pub fn remember(request: Request) {
+    let size = match request { Request::Native => None, Request::Size(w, h) => Some(format!("{w}x{h}")) };
+    if let Err(error) = crate::system_actions::merge_save(|settings| settings.resolution = size) {
+        log::warn!("Desktop resolution memory not saved: {error}");
+    }
+}
+
+/// The stored size to replay on a new desktop connection. Replays stay off unless
+/// `UU_RESOLUTION_REMEMBER=1`, like the privacy screen's `UU_PRIVACY_REMEMBER`, so an upgrade never
+/// changes a desktop nobody opted into. `UU_DESKTOP_RESIZE=0` keeps scaling and is left alone.
+pub fn remembered() -> Option<(u32, u32)> {
+    if !enabled() || std::env::var("UU_RESOLUTION_REMEMBER").ok().as_deref() != Some("1") { return None; }
+    crate::system_actions::load_settings().resolution.as_deref().and_then(mode_size)
+}
+
+/// Switches to a replayed size; None when the display is already there, so the caller skips the
+/// capture restart and the messages a change would need.
+pub fn replay(display: &str, size: (u32, u32)) -> Option<(u32, u32)> {
+    if query(display).is_ok_and(|state| state.current == Some(size)) { return None; }
+    apply(display, Request::Size(size.0, size.1))
+}
 
 /// Keeps the changed mode while any desktop stream runs; the last one restores it.
 pub struct StreamGuard;
@@ -218,5 +245,29 @@ HDMI-2 disconnected (normal left inverted right x axis y axis)
         assert_eq!(state.modes.len(), 3);
         assert_eq!(state.modes[1], ("3840x2160R".to_owned(), (3840, 2160)));
         assert!(parse("Screen 0: minimum 320 x 200\nDP-1 disconnected (normal)\n").is_none());
+    }
+
+    #[test]
+    fn a_remembered_size_replays_only_with_the_opt_in() {
+        let _guard = crate::config::test_env_lock().lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("uu-resolution-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("UU_CONFIG", dir.join("config.json"));
+        std::env::remove_var("UU_RESOLUTION_REMEMBER");
+        std::env::remove_var("UU_DESKTOP_RESIZE");
+        remember(Request::Size(1280, 720));
+        assert_eq!(remembered(), None, "an upgrade must not start resizing on connect");
+        std::env::set_var("UU_RESOLUTION_REMEMBER", "1");
+        assert_eq!(remembered(), Some((1280, 720)));
+        std::env::set_var("UU_DESKTOP_RESIZE", "0");
+        assert_eq!(remembered(), None, "the scaling path keeps its own choice");
+        std::env::remove_var("UU_DESKTOP_RESIZE");
+        remember(Request::Native);
+        assert_eq!(remembered(), None, "原始/跟随被控端 clears the memory");
+        crate::system_actions::merge_save(|s| s.resolution = Some("nonsense".into())).unwrap();
+        assert_eq!(remembered(), None, "a hand-edited value is ignored");
+        for key in ["UU_RESOLUTION_REMEMBER", "UU_CONFIG"] { std::env::remove_var(key); }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
